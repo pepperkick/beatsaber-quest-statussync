@@ -11,6 +11,7 @@
 
 #include "include/utils/utils.h"
 #include "include/inline-hook/inlineHook.h"
+#include "include/librws.h"
 
 #define VERSION "1.0.0"
 #define LOG_TAG "SSYNC"
@@ -18,7 +19,12 @@
 using namespace std;
 
 void StartWebsocket();
-void ProcessSongInfo(void*);
+void SendSongInfo(void*);
+
+rws_socket _socket = NULL;
+rws_socket _serverSocket = NULL;
+char server_ip[32] = "127.0.0.1";
+int server_port = 4050;
 
 typedef struct __attribute__((__packed__)) {
     int m_Handle;
@@ -61,7 +67,7 @@ MAKE_HOOK(Hook_StartStandardLevel, 0x12D08D0, void, void* self, void* a1, void* 
 
     log("[%s] Song Started", LOG_TAG);
 
-    ProcessSongInfo(a1);
+    SendSongInfo(a1);
 }
 
 MAKE_HOOK(Hook_Scene_GetNameInternal, 0xBE31C4, cs_string*, int handle) {
@@ -81,6 +87,30 @@ MAKE_HOOK(Hook_SceneManager_SetActiveScene, 0xBE38CC, int, Scene scene) {
     return r;
 }
 
+
+static void on_socket_connected(rws_socket socket) {
+    log("[%s] Socket connected", LOG_TAG);
+    rws_socket_send_text(socket, "{\"event\":\"hello\"}");
+    _serverSocket = socket;
+}
+
+static void on_socket_disconnected(rws_socket socket) {
+    rws_error error = rws_socket_get_error(socket);
+
+    if (error) { 
+        log("[%s] Socket disconnected with code, error: %i, %s", LOG_TAG, rws_error_get_code(error), rws_error_get_description(error)); 
+    } else {
+        log("[%s] Socket disconnected", LOG_TAG);
+    }
+
+    _socket = NULL;
+    _serverSocket = NULL;
+}
+
+static void on_socket_received_text(rws_socket socket, const char * text, const unsigned int length) {
+    log("[%s] Socket Received Text: %s", LOG_TAG, text);
+}
+
 __attribute__((constructor)) void lib_main() {
     INSTALL_HOOK(Hook_Scene_GetNameInternal);
     INSTALL_HOOK(Hook_SceneManager_SetActiveScene);
@@ -93,11 +123,32 @@ __attribute__((constructor)) void lib_main() {
     INSTALL_HOOK(Hook_GetSongDuration);
     INSTALL_HOOK(Hook_GetLevel);
     INSTALL_HOOK(Hook_GetDifficulty);
+
+    FILE* config = fopen("/sdcard/Android/data/com.beatgames.beatsaber/files/cfgs/lightsync.json", "r");
+    fscanf(config, "%s\n%d", &server_ip[0], &server_port);
+    fclose(config);
+    
+    thread websocketThread(StartWebsocket);
+    websocketThread.detach();
     
     log("[%s] Loaded, Version: %s", LOG_TAG, VERSION);
 }
 
-void ProcessSongInfo(void* a1) {
+void StartWebsocket() {
+    _socket = rws_socket_create();
+    rws_socket_set_scheme(_socket, "ws");
+    rws_socket_set_host(_socket, server_ip);
+    rws_socket_set_port(_socket, server_port);
+    rws_socket_set_path(_socket, "/");    
+    rws_socket_set_on_disconnected(_socket, &on_socket_disconnected);
+    rws_socket_set_on_connected(_socket, &on_socket_connected);
+    rws_socket_set_on_received_text(_socket, &on_socket_received_text);
+    rws_socket_connect(_socket);
+
+    log("[%s] Websocket Started", LOG_TAG);
+}
+
+void SendSongInfo(void* a1) {
     int difficulty = Hook_GetDifficulty(a1);
     void* level = Hook_GetLevel(a1);
     cs_string* id = Hook_GetSongID(level);
@@ -113,4 +164,8 @@ void ProcessSongInfo(void* a1) {
     csstrtostr(subname, &songSubname[0]);
     csstrtostr(artist, &songArtist[0]);
     csstrtostr(author, &levelAuthor[0]);
+
+    if (_serverSocket) {
+
+    }
 }
