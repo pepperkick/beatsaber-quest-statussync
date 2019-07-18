@@ -20,14 +20,16 @@
 #define LOG_TAG "SSYNC"
 
 using namespace std;
+using namespace tao;
 
 void StartDiscovery();
 void StartWebsocket();
-void SendSongInfo(void*);
+void ProcessSongInfo(void*);
+void SendStatus(json::value);
 
 rws_socket _socket = NULL;
 rws_socket _serverSocket = NULL;
-string server_ip = NULL;
+string server_ip = "";
 int server_port;
 
 typedef struct __attribute__((__packed__)) {
@@ -71,7 +73,7 @@ MAKE_HOOK(Hook_StartStandardLevel, 0x12D08D0, void, void* self, void* a1, void* 
 
     log("[%s] Song Started", LOG_TAG);
 
-    SendSongInfo(a1);
+    ProcessSongInfo(a1);
 }
 
 MAKE_HOOK(Hook_Scene_GetNameInternal, 0xBE31C4, cs_string*, int handle) {
@@ -141,7 +143,9 @@ void StartDiscovery() {
     std::vector<std::pair<std::string, std::string>> foundDevices = upnp.getDevices(handler);
 
     for (const std::pair<std::string, std::string> &p : foundDevices) {
-        if (p.second.find("BeatSaberStatusSyncServer")) {
+        std::size_t found = p.second.find("BeatSaberStatusSyncServer");
+        if (found != string::npos) {
+            log("[%s] Found Server: %s", LOG_TAG, p.second.c_str());
             string signature = p.second;
 
             char delim = ' ';
@@ -152,7 +156,8 @@ void StartDiscovery() {
                 params.push_back(temp);
             
             for (string param : params) {
-                if (param.find("IP/")) {
+                found = param.find("IP/");
+                if (found != string::npos) {
                     char delim = '/';
                     vector<string> params;
                     stringstream ss(param);
@@ -161,7 +166,12 @@ void StartDiscovery() {
                         params.push_back(temp);
 
                     server_ip = params[1];
-                } else if (param.find("Port/")) {
+
+                    continue;
+                } 
+                
+                found = param.find("Port/");
+                if (found != string::npos) {
                     char delim = '/';
                     vector<string> params;
                     stringstream ss(param);
@@ -170,23 +180,27 @@ void StartDiscovery() {
                         params.push_back(temp);
 
                     stringstream iss(params[1]);
-                    iss >> server_port;                    
+                    iss >> server_port;       
+                    
+                    continue;       
                 }
+            }            
+
+            if (server_port && !server_ip.empty()) {
+                thread websocketThread(StartWebsocket);
+                websocketThread.detach();
+
+                return;
             }
         }
-    }
-
-    if (server_port && server_ip.empty()) {
-        thread websocketThread(StartWebsocket);
-        websocketThread.detach();
-
-        return;
     }
 
     log("[%s] Could not connect to server", LOG_TAG);
 }
 
 void StartWebsocket() {
+    log("[%s] Websocket Connecting to %s:%d...", LOG_TAG, server_ip.c_str(), server_port);
+
     _socket = rws_socket_create();
     rws_socket_set_scheme(_socket, "ws");
     rws_socket_set_host(_socket, server_ip.c_str());
@@ -200,17 +214,17 @@ void StartWebsocket() {
     log("[%s] Websocket Started", LOG_TAG);
 }
 
-void SendSongInfo(void* a1) {
-    tao::json::value status = tao::json::empty_object;
+void ProcessSongInfo(void* a1) {
+    json::value status = tao::json::empty_object;
 
-    songInfo["difficulty"] = Hook_GetDifficulty(a1);
+    int difficult = Hook_GetDifficulty(a1);
     void* level = Hook_GetLevel(a1);
     cs_string* id = Hook_GetSongID(level);
     cs_string* name = Hook_GetSongName(level);
     cs_string* subname = Hook_GetSongSubName(level);
     cs_string* artist = Hook_GetSongArtist(level);
     cs_string* author = Hook_GetLevelAuthor(level);
-    songInfo["duration"] = Hook_GetSongDuration(level);
+    float duration = Hook_GetSongDuration(level);
 
     char songId[10], songName[128], songSubname[128], songArtist[128], levelAuthor[128];
     csstrtostr(id, &songId[0]);
@@ -219,11 +233,24 @@ void SendSongInfo(void* a1) {
     csstrtostr(artist, &songArtist[0]);
     csstrtostr(author, &levelAuthor[0]);
 
-    if (_serverSocket) {
+    char detailsBuffer[256];
+    sprintf(detailsBuffer, "%s - %s", songName, songArtist);
+    string details(detailsBuffer);
 
+    status = {
+        { "state", "Playing Song" },
+        { "details", details },
+        { "timestamps", {
+            { "start", time(nullptr) },
+            { "end", time(nullptr) +Hook_GetSongDuration(level) },
+        }}
+    };
+
+    if (_serverSocket) {
+        SendStatus(status);
     }
 }
 
-void SendStatus(tao::json::value status) {
-
+void SendStatus(json::value status) {
+    rws_socket_send_text(_serverSocket, json::to_string(status).c_str());
 }
