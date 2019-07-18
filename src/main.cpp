@@ -12,19 +12,23 @@
 #include "include/utils/utils.h"
 #include "include/inline-hook/inlineHook.h"
 #include "include/librws.h"
+#include "include/upnp/UPnP.h"
+#include "include/upnp/LinHttpHandler.h"
+#include "include/tao/json.hpp"
 
 #define VERSION "1.0.0"
 #define LOG_TAG "SSYNC"
 
 using namespace std;
 
+void StartDiscovery();
 void StartWebsocket();
 void SendSongInfo(void*);
 
 rws_socket _socket = NULL;
 rws_socket _serverSocket = NULL;
-char server_ip[32] = "127.0.0.1";
-int server_port = 4050;
+string server_ip = NULL;
+int server_port;
 
 typedef struct __attribute__((__packed__)) {
     int m_Handle;
@@ -89,8 +93,7 @@ MAKE_HOOK(Hook_SceneManager_SetActiveScene, 0xBE38CC, int, Scene scene) {
 
 
 static void on_socket_connected(rws_socket socket) {
-    log("[%s] Socket connected", LOG_TAG);
-    rws_socket_send_text(socket, "{\"event\":\"hello\"}");
+    log("[%s] Websocket Connected to %s:%d", LOG_TAG, server_ip.c_str(), server_port);
     _serverSocket = socket;
 }
 
@@ -124,20 +127,69 @@ __attribute__((constructor)) void lib_main() {
     INSTALL_HOOK(Hook_GetLevel);
     INSTALL_HOOK(Hook_GetDifficulty);
 
-    FILE* config = fopen("/sdcard/Android/data/com.beatgames.beatsaber/files/cfgs/lightsync.json", "r");
-    fscanf(config, "%s\n%d", &server_ip[0], &server_port);
-    fclose(config);
-    
-    thread websocketThread(StartWebsocket);
-    websocketThread.detach();
+    thread discoverThread(StartDiscovery);
+    discoverThread.detach();
     
     log("[%s] Loaded, Version: %s", LOG_TAG, VERSION);
+}
+
+void StartDiscovery() {
+    log("[%s] Searching for Server", LOG_TAG);
+
+    auto handler = std::make_shared<LinHttpHandler>();
+    UPnP upnp;
+    std::vector<std::pair<std::string, std::string>> foundDevices = upnp.getDevices(handler);
+
+    for (const std::pair<std::string, std::string> &p : foundDevices) {
+        if (p.second.find("BeatSaberStatusSyncServer")) {
+            string signature = p.second;
+
+            char delim = ' ';
+            vector<string> params;
+            stringstream ss(signature);
+            string temp;
+            while (getline(ss, temp, delim))
+                params.push_back(temp);
+            
+            for (string param : params) {
+                if (param.find("IP/")) {
+                    char delim = '/';
+                    vector<string> params;
+                    stringstream ss(param);
+                    string temp;
+                    while (getline(ss, temp, delim))
+                        params.push_back(temp);
+
+                    server_ip = params[1];
+                } else if (param.find("Port/")) {
+                    char delim = '/';
+                    vector<string> params;
+                    stringstream ss(param);
+                    string temp;
+                    while (getline(ss, temp, delim))
+                        params.push_back(temp);
+
+                    stringstream iss(params[1]);
+                    iss >> server_port;                    
+                }
+            }
+        }
+    }
+
+    if (server_port && server_ip.empty()) {
+        thread websocketThread(StartWebsocket);
+        websocketThread.detach();
+
+        return;
+    }
+
+    log("[%s] Could not connect to server", LOG_TAG);
 }
 
 void StartWebsocket() {
     _socket = rws_socket_create();
     rws_socket_set_scheme(_socket, "ws");
-    rws_socket_set_host(_socket, server_ip);
+    rws_socket_set_host(_socket, server_ip.c_str());
     rws_socket_set_port(_socket, server_port);
     rws_socket_set_path(_socket, "/");    
     rws_socket_set_on_disconnected(_socket, &on_socket_disconnected);
@@ -149,14 +201,16 @@ void StartWebsocket() {
 }
 
 void SendSongInfo(void* a1) {
-    int difficulty = Hook_GetDifficulty(a1);
+    tao::json::value status = tao::json::empty_object;
+
+    songInfo["difficulty"] = Hook_GetDifficulty(a1);
     void* level = Hook_GetLevel(a1);
     cs_string* id = Hook_GetSongID(level);
     cs_string* name = Hook_GetSongName(level);
     cs_string* subname = Hook_GetSongSubName(level);
     cs_string* artist = Hook_GetSongArtist(level);
     cs_string* author = Hook_GetLevelAuthor(level);
-    float duration = Hook_GetSongDuration(level);
+    songInfo["duration"] = Hook_GetSongDuration(level);
 
     char songId[10], songName[128], songSubname[128], songArtist[128], levelAuthor[128];
     csstrtostr(id, &songId[0]);
@@ -168,4 +222,8 @@ void SendSongInfo(void* a1) {
     if (_serverSocket) {
 
     }
+}
+
+void SendStatus(tao::json::value status) {
+
 }

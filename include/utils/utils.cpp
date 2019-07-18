@@ -4,7 +4,7 @@
 
 #include "utils.h"
 #include <android/log.h>
-#include <string.h>
+#include <string>
 #include <stdio.h>
 #include <stdlib.h>
 #include <dlfcn.h>
@@ -72,12 +72,20 @@ long getRealOffset(long offset) // calculate dump.cs address + lib.so base addre
     return location + offset;
 }
 
-
-
 void csstrtostr(cs_string* in, char* out)
 {
     for(int i = 0; i < in->len; i++) {
         out[i] = in->str[i*2];
     }
     out[in->len] = '\0';
+}
+
+std::string csstrtocppstr(cs_string* in)
+{
+    char out[128];
+    csstrtostr(in, out);
+
+    std::string str(out);
+
+    return str;
 }

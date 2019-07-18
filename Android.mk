@@ -34,11 +34,14 @@ ALL_SOURCES := \
 	include/librws/rws_socketpriv.c \
 	include/librws/rws_socketpub.c \
 	include/librws/rws_string.c \
-	include/librws/rws_thread.c 
+	include/librws/rws_thread.c \
+	include/upnp/jsoncpp.cpp  \
+	include/upnp/UPnP.cpp  \
+	include/upnp/LinHttpHandler.cpp
 
 ALL_INCLUDES := $(LOCAL_PATH)/include
 
-ALL_CFLAGS := -w
+ALL_CFLAGS := -w -fexceptions -frtti
 
 include $(CLEAR_VARS)
 LOCAL_LDLIBS := -llog
