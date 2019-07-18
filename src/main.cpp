@@ -181,7 +181,7 @@ void StartDiscovery() {
 
                     stringstream iss(params[1]);
                     iss >> server_port;       
-                    
+
                     continue;       
                 }
             }            
@@ -233,17 +233,29 @@ void ProcessSongInfo(void* a1) {
     csstrtostr(artist, &songArtist[0]);
     csstrtostr(author, &levelAuthor[0]);
 
+    string difficulty;
+    if (difficult == 0) difficulty = "Easy";
+    else if (difficult == 1) difficulty = "Normal";
+    else if (difficult == 2) difficulty = "Hard";
+    else if (difficult == 3) difficulty = "Expert";
+    else if (difficult == 4) difficulty = "Expert+";
+
     char detailsBuffer[256];
     sprintf(detailsBuffer, "%s - %s", songName, songArtist);
     string details(detailsBuffer);
 
+    char stateBuffer[256];
+    sprintf(stateBuffer, "Playing %s Level", difficulty.c_str());
+    string state(stateBuffer);
+
     status = {
-        { "state", "Playing Song" },
+        { "state", state },
         { "details", details },
         { "timestamps", {
             { "start", time(nullptr) },
-            { "end", time(nullptr) +Hook_GetSongDuration(level) },
-        }}
+            { "end", time(nullptr) + (int) (Hook_GetSongDuration(level)) },
+        }},
+        { "largeImageKey", "logo" }
     };
 
     if (_serverSocket) {
